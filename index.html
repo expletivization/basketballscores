@@ -9,21 +9,21 @@
   <style>
     body { font-family: 'Inter', sans-serif; }
     .game-card { transition: transform 0.2s ease, box-shadow 0.2s ease; }
-    .game-card:hover { transform: translateY(-3px); box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+    .game-card:hover { transform: translateY(-3px); box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
   </style>
 </head>
-<body class="bg-gray-950 text-white min-h-screen px-4 py-10">
+<body class="bg-gray-50 text-gray-900 min-h-screen px-4 py-10">
 
   <div class="max-w-4xl mx-auto mb-10 text-center">
-    <h1 class="text-5xl font-black tracking-tight">🏀 College Hoops Today</h1>
+    <h1 class="text-5xl font-black tracking-tight text-gray-900">🏀 College Hoops Today</h1>
     <p id="date-display" class="text-gray-400 mt-2 text-lg"></p>
   </div>
 
   <div id="games-container" class="max-w-4xl mx-auto grid gap-5">
-    <p class="text-center text-gray-500 animate-pulse">Loading today's games...</p>
+    <p class="text-center text-gray-400 animate-pulse">Loading today's games...</p>
   </div>
 
-  <p class="text-center text-gray-600 text-xs mt-12">Data via ESPN · Odds via The Odds API</p>
+  <p class="text-center text-gray-300 text-xs mt-12">Data via ESPN · Odds via The Odds API</p>
 
   <script>
     const ODDS_API_KEY = "8753ccc038eb27ba065e0f4d25d57081";
@@ -55,7 +55,7 @@
         const events = espnData.events || [];
 
         if (events.length === 0) {
-          container.innerHTML = `<p class="text-center text-gray-500 text-lg">No games scheduled today.</p>`;
+          container.innerHTML = `<p class="text-center text-gray-400 text-lg">No games scheduled today.</p>`;
           return;
         }
 
@@ -80,10 +80,13 @@
     function buildBullets(event, home, away) {
       const bullets = [];
       const competition = event.competitions?.[0];
-      const homeRank = home?.curatedRank?.current;
-      const awayRank = away?.curatedRank?.current;
-      if (homeRank && homeRank <= 25) bullets.push(`🏆 ${home.team.shortDisplayName} is ranked #${homeRank} in the AP Poll`);
-      if (awayRank && awayRank <= 25) bullets.push(`🏆 ${away.team.shortDisplayName} is ranked #${awayRank} in the AP Poll`);
+
+      // Seeds (tournament context, not AP Poll)
+      const homeSeed = home?.curatedRank?.current;
+      const awaySeed = away?.curatedRank?.current;
+      if (homeSeed && homeSeed <= 16) bullets.push(`🌱 ${home.team.shortDisplayName} is the #${homeSeed} seed`);
+      if (awaySeed && awaySeed <= 16) bullets.push(`🌱 ${away.team.shortDisplayName} is the #${awaySeed} seed`);
+
       if (competition?.neutralSite) bullets.push("📍 Neutral site game");
       if (competition?.conferenceCompetition) bullets.push("🏟 Conference matchup");
       const venue = competition?.venue;
@@ -112,12 +115,12 @@
       const bullets = buildBullets(event, home, away);
 
       return `
-        <div class="game-card bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-lg">
+        <div class="game-card bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
           <div class="flex justify-between items-center mb-4">
-            <span class="text-xs font-semibold uppercase tracking-widest ${isLive ? 'text-green-400' : 'text-gray-500'}">
+            <span class="text-xs font-semibold uppercase tracking-widest ${isLive ? 'text-green-500' : 'text-gray-400'}">
               ${isLive ? '🔴 LIVE' : '🗓 ' + gameTime}
             </span>
-            <span class="text-xs font-semibold bg-blue-900 text-blue-300 px-3 py-1 rounded-full">
+            <span class="text-xs font-semibold bg-blue-50 text-blue-500 px-3 py-1 rounded-full border border-blue-100">
               📺 ${broadcast}
             </span>
           </div>
@@ -125,23 +128,23 @@
           <div class="flex items-center justify-between gap-4">
             <div class="flex flex-col items-center text-center w-1/3">
               <img src="${awayLogo}" alt="${awayName}" class="w-16 h-16 object-contain mb-2" onerror="this.style.display='none'"/>
-              <p class="font-bold text-lg leading-tight">${awayName}</p>
-              <p class="text-gray-500 text-sm">${awayRecord}</p>
+              <p class="font-bold text-lg leading-tight text-gray-900">${awayName}</p>
+              <p class="text-gray-400 text-sm">${awayRecord}</p>
             </div>
             <div class="flex flex-col items-center w-1/3">
-              <p class="text-3xl font-black text-gray-600">VS</p>
-              <p class="text-xs text-yellow-400 font-semibold mt-1">${spread}</p>
+              <p class="text-3xl font-black text-gray-200">VS</p>
+              <p class="text-xs text-amber-500 font-semibold mt-1">${spread}</p>
             </div>
             <div class="flex flex-col items-center text-center w-1/3">
               <img src="${homeLogo}" alt="${homeName}" class="w-16 h-16 object-contain mb-2" onerror="this.style.display='none'"/>
-              <p class="font-bold text-lg leading-tight">${homeName}</p>
-              <p class="text-gray-500 text-sm">${homeRecord}</p>
+              <p class="font-bold text-lg leading-tight text-gray-900">${homeName}</p>
+              <p class="text-gray-400 text-sm">${homeRecord}</p>
             </div>
           </div>
 
           ${bullets.length > 0 ? `
-          <ul class="mt-5 border-t border-gray-800 pt-4 space-y-1">
-            ${bullets.map(b => `<li class="text-sm text-gray-400">• ${b}</li>`).join("")}
+          <ul class="mt-5 border-t border-gray-100 pt-4 space-y-1">
+            ${bullets.map(b => `<li class="text-sm text-gray-500">• ${b}</li>`).join("")}
           </ul>` : ""}
         </div>
       `;
