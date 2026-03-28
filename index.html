@@ -44,7 +44,6 @@
       weekday: "long", year: "numeric", month: "long", day: "numeric"
     });
 
-    // --- Normalize team names for fuzzy matching ---
     function normalizeName(name) {
       return name
         .toLowerCase()
@@ -54,7 +53,6 @@
         .trim();
     }
 
-    // --- Find a team in Barttorvik data ---
     function findTorvik(trvData, teamName) {
       const needle = normalizeName(teamName);
       return trvData.find(t => {
@@ -63,7 +61,6 @@
       });
     }
 
-    // --- Find spread ---
     function findSpread(oddsData, homeTeam, awayTeam) {
       const match = oddsData.find(game =>
         game.home_team.toLowerCase().includes(homeTeam.toLowerCase().split(" ").pop()) ||
@@ -75,7 +72,6 @@
       return market.outcomes.map(o => `${o.name} ${o.point > 0 ? "+" : ""}${o.point}`).join(" / ");
     }
 
-    // --- Build bullet points ---
     function buildBullets(event, home, away) {
       const bullets = [];
       const competition = event.competitions?.[0];
@@ -90,7 +86,6 @@
       return bullets;
     }
 
-    // --- Torvik stat block for one team ---
     function trvStatBlock(trvTeam, teamName) {
       if (!trvTeam) {
         return `
@@ -99,11 +94,9 @@
             <p class="text-xs text-gray-300">Stats N/A</p>
           </div>`;
       }
-
       const rank = trvTeam.rk ?? "—";
       const adjOE = parseFloat(trvTeam.adjoe).toFixed(1);
       const adjDE = parseFloat(trvTeam.adjde).toFixed(1);
-
       return `
         <div class="text-center">
           <p class="text-xs font-black text-gray-500 uppercase tracking-wide mb-2">${teamName}</p>
@@ -124,7 +117,6 @@
         </div>`;
     }
 
-    // --- Build a game card ---
     function buildCard(event, oddsData, trvData) {
       const competition = event.competitions?.[0];
       const competitors = competition?.competitors || [];
@@ -146,15 +138,11 @@
       const isLive = event.status?.type?.state === "in";
       const spread = findSpread(oddsData, homeShort, awayShort) || "Spread N/A";
       const bullets = buildBullets(event, home, away);
-
-      // Torvik lookups using full display name for better matching
       const homeTrv = findTorvik(trvData, homeName);
       const awayTrv = findTorvik(trvData, awayName);
 
       return `
         <div class="game-card bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
-
-          <!-- Header: time + broadcast -->
           <div class="flex justify-between items-center mb-4">
             <span class="text-xs font-semibold uppercase tracking-widest ${isLive ? 'text-green-500' : 'text-gray-400'}">
               ${isLive ? '🔴 LIVE' : '🗓 ' + gameTime}
@@ -164,7 +152,6 @@
             </span>
           </div>
 
-          <!-- Teams -->
           <div class="flex items-center justify-between gap-4">
             <div class="flex flex-col items-center text-center w-1/3">
               <img src="${awayLogo}" alt="${awayShort}" class="w-16 h-16 object-contain mb-2" onerror="this.style.display='none'"/>
@@ -182,56 +169,68 @@
             </div>
           </div>
 
-          <!-- Torvik Stats -->
           <div class="mt-5 border-t border-gray-100 pt-4 grid grid-cols-2 gap-4">
             ${trvStatBlock(awayTrv, awayShort)}
             ${trvStatBlock(homeTrv, homeShort)}
           </div>
 
-          <!-- Bullet Points -->
           ${bullets.length > 0 ? `
           <ul class="mt-4 border-t border-gray-100 pt-4 space-y-1">
             ${bullets.map(b => `<li class="text-sm text-gray-500">• ${b}</li>`).join("")}
           </ul>` : ""}
-
         </div>
       `;
     }
 
-    // --- Main loader ---
     async function loadGames() {
       const container = document.getElementById("games-container");
+
       try {
-        const [espnRes, oddsRes, trvRes] = await Promise.all([
-          fetch(ESPN_URL),
-          fetch(ODDS_URL),
-          fetch(TORVIK_URL)
-        ]);
+        let espnData, oddsData, trvData;
 
-        const espnData = await espnRes.json();
-        const oddsData = await oddsRes.json();
-        const trvRaw = await trvRes.json();
+        try {
+          const espnRes = await fetch(ESPN_URL);
+          espnData = await espnRes.json();
+          console.log("✅ ESPN loaded:", espnData);
+        } catch (e) {
+          console.error("❌ ESPN fetch failed:", e);
+        }
 
-        // Barttorvik returns an array of arrays — map to objects
-        const trvData = trvRaw.map(t => ({
-          team:  t[0],
-          adjoe: t[4],
-          adjde: t[5],
-          rk:    t[3]
-        }));
+        try {
+          const oddsRes = await fetch(ODDS_URL);
+          oddsData = await oddsRes.json();
+          console.log("✅ Odds loaded:", oddsData);
+        } catch (e) {
+          console.error("❌ Odds fetch failed:", e);
+        }
 
-        const events = espnData.events || [];
+        try {
+          const trvRes = await fetch(TORVIK_URL);
+          const trvRaw = await trvRes.json();
+          trvData = trvRaw.map(t => ({
+            team:  t[0],
+            adjoe: t[4],
+            adjde: t[5],
+            rk:    t[3]
+          }));
+          console.log("✅ Torvik loaded:", trvData.slice(0, 3));
+        } catch (e) {
+          console.error("❌ Torvik fetch failed:", e);
+          trvData = [];
+        }
+
+        const events = espnData?.events || [];
 
         if (events.length === 0) {
           container.innerHTML = `<p class="text-center text-gray-400 text-lg">No games scheduled today.</p>`;
           return;
         }
 
-        container.innerHTML = events.map(event => buildCard(event, oddsData, trvData)).join("");
+        container.innerHTML = events.map(event => buildCard(event, oddsData || [], trvData || [])).join("");
 
       } catch (err) {
         container.innerHTML = `<p class="text-center text-red-400">Failed to load games. Please try again later.</p>`;
-        console.error(err);
+        console.error("💥 Global error:", err);
       }
     }
 
