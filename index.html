@@ -36,8 +36,11 @@
       return `${year}${month}${day}`;
     }
 
-    const ESPN_URL = `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates=${getDateParam()}`;
-    const ODDS_URL = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds/?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads&oddsFormat=american`;
+    const ESPN_SCOREBOARD_URL =
+      `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates=${getDateParam()}`;
+
+    const ODDS_URL =
+      `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds/?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads&oddsFormat=american`;
 
     document.getElementById("date-display").textContent = new Date().toLocaleDateString("en-US", {
       weekday: "long", year: "numeric", month: "long", day: "numeric"
@@ -81,25 +84,6 @@
       return null;
     }
 
-    function toTeamSummaryStatMap(teamSummaryPayload) {
-      // Team summary endpoint often has: { team: { statistics: [...] } } or { team: { stats: [...] } }
-      const map = {};
-      const arr =
-        teamSummaryPayload?.team?.statistics ||
-        teamSummaryPayload?.team?.stats ||
-        teamSummaryPayload?.statistics ||
-        teamSummaryPayload?.stats;
-
-      if (Array.isArray(arr)) {
-        for (const s of arr) {
-          const name = s.name || s.shortName || s.abbreviation || s.displayName;
-          const value = s.value ?? s.displayValue;
-          if (name != null && value != null) map[String(name)] = value;
-        }
-      }
-      return map;
-    }
-
     // ---- ESPN fetchers ----
     async function fetchOffenseStats(teamId) {
       // returns { ppg, fgPct }
@@ -123,43 +107,72 @@
       }
     }
 
-    async function fetchDefenseFromSummary(teamId) {
-      // returns { papg, margin } when available
+    async function fetchDefenseFromSchedule(teamId, maxGames = 25) {
+      // returns { papg, margin } computed from completed games
       try {
-        const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams/${teamId}`;
+        const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams/${teamId}/schedule`;
         const res = await fetch(url);
         const data = await res.json();
-        const flat = toTeamSummaryStatMap(data);
 
-        // print keys once per team (remove later if you want)
-        console.log(`🛡️ Summary stat keys for team ${teamId}:`, Object.keys(flat).slice(0, 80));
+        const events = data?.events || [];
+        let games = 0, ptsFor = 0, ptsAgainst = 0;
 
-        const papg = num(
-          pickFirst(flat, ["avgPointsAllowed", "avgPointsAgainst", "pointsAgainstPerGame", "oppPointsPerGame", "opponentPointsPerGame"])
-        );
+        for (const ev of events) {
+          if (games >= maxGames) break;
 
-        const margin = num(
-          pickFirst(flat, ["avgPointDifferential", "pointDifferential", "scoringMargin", "marginOfVictory"])
-        );
+          // status
+          const state = ev?.status?.type?.state; // "post", "in", "pre"
+          if (state !== "post") continue;
+
+          const comps = ev?.competitions?.[0]?.competitors || [];
+          if (!comps.length) continue;
+
+          // find this team in competitors
+          const me = comps.find(c => String(c?.team?.id) === String(teamId));
+          const opp = comps.find(c => String(c?.team?.id) !== String(teamId));
+          if (!me || !opp) continue;
+
+          const myScore = num(me?.score);
+          const oppScore = num(opp?.score);
+          if (myScore == null || oppScore == null) continue;
+
+          ptsFor += myScore;
+          ptsAgainst += oppScore;
+          games += 1;
+        }
+
+        if (games === 0) return { papg: null, margin: null };
+
+        const papg = (ptsAgainst / games);
+        const margin = ((ptsFor - ptsAgainst) / games);
 
         return {
-          papg: papg != null ? papg.toFixed(1) : null,
-          margin: margin != null ? margin.toFixed(1) : null
+          papg: papg.toFixed(1),
+          margin: margin.toFixed(1)
         };
       } catch (e) {
-        console.error("❌ summary defense failed", teamId, e);
+        console.error("❌ schedule defense failed", teamId, e);
         return { papg: null, margin: null };
       }
     }
 
+    const teamStatsCache = new Map();
+
     async function fetchTeamStatsCombined(teamId) {
-      const [off, def] = await Promise.all([
-        fetchOffenseStats(teamId),
-        fetchDefenseFromSummary(teamId)
-      ]);
-      const combined = { ...off, ...def };
-      console.log(`✅ Combined stats ${teamId}:`, combined);
-      return combined;
+      if (teamStatsCache.has(teamId)) return teamStatsCache.get(teamId);
+
+      const p = (async () => {
+        const [off, def] = await Promise.all([
+          fetchOffenseStats(teamId),
+          fetchDefenseFromSchedule(teamId)
+        ]);
+        const combined = { ...off, ...def };
+        console.log(`✅ Combined stats ${teamId}:`, combined);
+        return combined;
+      })();
+
+      teamStatsCache.set(teamId, p);
+      return p;
     }
 
     // ---- UI helpers ----
@@ -217,7 +230,7 @@
             </div>` : ""}
             ${stats.papg ? `
             <div class="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2">
-              <p class="text-xs text-blue-400 leading-none mb-1">OPP PPG</p>
+              <p class="text-xs text-blue-400 leading-none mb-1">PAPG</p>
               <p class="text-base font-black text-blue-600">${stats.papg}</p>
             </div>` : ""}
             ${stats.margin ? `
@@ -303,7 +316,7 @@
       const container = document.getElementById("games-container");
 
       try {
-        const [espnRes, oddsRes] = await Promise.all([fetch(ESPN_URL), fetch(ODDS_URL)]);
+        const [espnRes, oddsRes] = await Promise.all([fetch(ESPN_SCOREBOARD_URL), fetch(ODDS_URL)]);
         const espnData = await espnRes.json();
         const oddsData = await oddsRes.json();
 
