@@ -27,7 +27,16 @@
 
   <script>
     const ODDS_API_KEY = "8753ccc038eb27ba065e0f4d25d57081";
-    const ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard";
+
+    function getDateParam() {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+      return `${year}${month}${day}`;
+    }
+
+    const ESPN_URL = `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates=${getDateParam()}`;
     const ODDS_URL = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds/?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads&oddsFormat=american`;
 
     document.getElementById("date-display").textContent = new Date().toLocaleDateString("en-US", {
