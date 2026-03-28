@@ -43,12 +43,8 @@
       weekday: "long", year: "numeric", month: "long", day: "numeric"
     });
 
-    // ---- ESPN stats helpers (robust to multiple payload shapes) ----
+    // ---- ESPN stats helpers ----
     function toFlatStatMap(statsPayload) {
-      // ESPN commonly returns either:
-      // 1) { stats: [{name, value}, ...] }
-      // 2) { statistics: { splits: { categories: [{stats:[{name,value}, ...]}] } } }
-      // 3) { splits: { categories: ... } }
       const map = {};
 
       const addStatArray = (arr) => {
@@ -61,14 +57,12 @@
         }
       };
 
-      // Shape 1
       addStatArray(statsPayload?.stats);
 
-      // Shape 2/3
       const categories =
         statsPayload?.statistics?.splits?.categories ||
         statsPayload?.splits?.categories ||
-        statsPayload?.results?.stats?.categories ||   // (older guess)
+        statsPayload?.results?.stats?.categories ||
         statsPayload?.categories;
 
       if (Array.isArray(categories)) {
@@ -91,38 +85,61 @@
       return null;
     }
 
-    // Fetch stats for a team by ESPN team ID
+    // A "contains" picker as a fallback when ESPN key names differ
+    function pickByIncludes(map, needles) {
+      const entries = Object.entries(map);
+      for (const needle of needles) {
+        const hit = entries.find(([k]) => k.toLowerCase().includes(needle));
+        if (hit) return hit[1];
+      }
+      return null;
+    }
+
     async function fetchTeamStats(teamId) {
       try {
         const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams/${teamId}/statistics`;
         const res = await fetch(url);
         const data = await res.json();
-
         const flat = toFlatStatMap(data);
 
-        // Helpful debug (you can remove later)
-        console.log(`📦 Stats keys for team ${teamId}:`, Object.keys(flat).slice(0, 30));
+        // Print real key names (so we can map reliably)
+        const keys = Object.keys(flat);
+        console.log(`📦 Stats key names for team ${teamId}:`, keys.slice(0, 80));
 
-        // These key names vary; we try multiple likely candidates.
-        const ppgRaw   = pickFirst(flat, ["ppg", "avgPoints", "pointsPerGame", "pointsPerGameFor", "pointsForPerGame"]);
-        const papgRaw  = pickFirst(flat, ["oppg", "avgPointsAgainst", "avgPointsAllowed", "pointsAgainstPerGame", "pointsAllowedPerGame"]);
-        const marginRaw= pickFirst(flat, ["avgPointDifferential", "pointDifferential", "scoringMargin", "marginOfVictory"]);
-        const fgRaw    = pickFirst(flat, ["fieldGoalPct", "fgPct", "fieldGoalPercentage"]);
+        // Try common keys first, then fallback to "includes" matching.
+        const ppgRaw =
+          pickFirst(flat, ["avgPoints", "pointsPerGame", "ppg"]) ??
+          pickByIncludes(flat, ["points per game", "ppg", "avg points", "points/game"]);
+
+        const papgRaw =
+          pickFirst(flat, ["avgPointsAllowed", "avgPointsAgainst", "pointsAgainstPerGame", "oppg"]) ??
+          pickByIncludes(flat, ["opponent points per game", "opp ppg", "points allowed", "points against per game"]);
+
+        const marginRaw =
+          pickFirst(flat, ["avgPointDifferential", "pointDifferential", "scoringMargin"]) ??
+          pickByIncludes(flat, ["point differential", "scoring margin", "margin"]);
+
+        const fgRaw =
+          pickFirst(flat, ["fieldGoalPct", "fgPct", "fieldGoalPercentage"]) ??
+          pickByIncludes(flat, ["field goal pct", "fg%","field goal percentage"]);
 
         const ppg = num(ppgRaw);
         const papg = num(papgRaw);
         const margin = num(marginRaw);
 
-        // FG% sometimes comes as 0.445 or 44.5 depending on endpoint
         let fgPct = num(fgRaw);
         if (fgPct != null && fgPct > 0 && fgPct <= 1) fgPct = fgPct * 100;
 
-        return {
+        const out = {
           ppg:    ppg != null ? ppg.toFixed(1) : null,
           papg:   papg != null ? papg.toFixed(1) : null,
           margin: margin != null ? margin.toFixed(1) : null,
           fgPct:  fgPct != null ? fgPct.toFixed(1) : null
         };
+
+        console.log(`✅ Computed team stats ${teamId}:`, out);
+        return out;
+
       } catch (e) {
         console.error(`❌ Stats fetch failed for team ${teamId}:`, e);
         return null;
@@ -282,18 +299,15 @@
           return;
         }
 
-        // Collect unique team IDs
         const teamIds = [...new Set(
           events.flatMap(ev => (ev.competitions?.[0]?.competitors || []).map(c => c.team?.id).filter(Boolean))
         )];
 
-        // Fetch all team stats in parallel
         const statsResults = await Promise.all(teamIds.map(id => fetchTeamStats(id)));
         const teamStatsMap = {};
         teamIds.forEach((id, i) => { teamStatsMap[id] = statsResults[i]; });
 
         console.log("✅ Team stats loaded for", teamIds.length, "teams");
-        console.log("🧾 Sample teamStatsMap:", teamStatsMap[teamIds[0]]);
 
         container.innerHTML = events.map(event => buildCard(event, oddsData || [], teamStatsMap)).join("");
 
