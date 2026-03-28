@@ -43,10 +43,15 @@
       weekday: "long", year: "numeric", month: "long", day: "numeric"
     });
 
-    // ---- ESPN stats helpers ----
+    // ---- helpers ----
+    function num(v) {
+      if (v == null) return null;
+      const n = typeof v === "number" ? v : parseFloat(String(v).replace("%",""));
+      return Number.isFinite(n) ? n : null;
+    }
+
     function toFlatStatMap(statsPayload) {
       const map = {};
-
       const addStatArray = (arr) => {
         if (!Array.isArray(arr)) return;
         for (const s of arr) {
@@ -68,84 +73,96 @@
       if (Array.isArray(categories)) {
         for (const cat of categories) addStatArray(cat?.stats);
       }
-
       return map;
     }
 
-    function num(v) {
-      if (v == null) return null;
-      const n = typeof v === "number" ? v : parseFloat(String(v).replace("%",""));
-      return Number.isFinite(n) ? n : null;
-    }
-
     function pickFirst(map, keys) {
-      for (const k of keys) {
-        if (map[k] != null) return map[k];
-      }
+      for (const k of keys) if (map[k] != null) return map[k];
       return null;
     }
 
-    // A "contains" picker as a fallback when ESPN key names differ
-    function pickByIncludes(map, needles) {
-      const entries = Object.entries(map);
-      for (const needle of needles) {
-        const hit = entries.find(([k]) => k.toLowerCase().includes(needle));
-        if (hit) return hit[1];
+    function toTeamSummaryStatMap(teamSummaryPayload) {
+      // Team summary endpoint often has: { team: { statistics: [...] } } or { team: { stats: [...] } }
+      const map = {};
+      const arr =
+        teamSummaryPayload?.team?.statistics ||
+        teamSummaryPayload?.team?.stats ||
+        teamSummaryPayload?.statistics ||
+        teamSummaryPayload?.stats;
+
+      if (Array.isArray(arr)) {
+        for (const s of arr) {
+          const name = s.name || s.shortName || s.abbreviation || s.displayName;
+          const value = s.value ?? s.displayValue;
+          if (name != null && value != null) map[String(name)] = value;
+        }
       }
-      return null;
+      return map;
     }
 
-    async function fetchTeamStats(teamId) {
+    // ---- ESPN fetchers ----
+    async function fetchOffenseStats(teamId) {
+      // returns { ppg, fgPct }
       try {
         const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams/${teamId}/statistics`;
         const res = await fetch(url);
         const data = await res.json();
         const flat = toFlatStatMap(data);
 
-        // Print real key names (so we can map reliably)
-        const keys = Object.keys(flat);
-        console.log(`📦 Stats key names for team ${teamId}:`, keys.slice(0, 80));
+        const ppg = num(pickFirst(flat, ["avgPoints", "ppg", "pointsPerGame"]));
+        let fg = num(pickFirst(flat, ["fieldGoalPct", "fgPct", "fieldGoalPercentage"]));
+        if (fg != null && fg > 0 && fg <= 1) fg *= 100;
 
-        // Try common keys first, then fallback to "includes" matching.
-        const ppgRaw =
-          pickFirst(flat, ["avgPoints", "pointsPerGame", "ppg"]) ??
-          pickByIncludes(flat, ["points per game", "ppg", "avg points", "points/game"]);
-
-        const papgRaw =
-          pickFirst(flat, ["avgPointsAllowed", "avgPointsAgainst", "pointsAgainstPerGame", "oppg"]) ??
-          pickByIncludes(flat, ["opponent points per game", "opp ppg", "points allowed", "points against per game"]);
-
-        const marginRaw =
-          pickFirst(flat, ["avgPointDifferential", "pointDifferential", "scoringMargin"]) ??
-          pickByIncludes(flat, ["point differential", "scoring margin", "margin"]);
-
-        const fgRaw =
-          pickFirst(flat, ["fieldGoalPct", "fgPct", "fieldGoalPercentage"]) ??
-          pickByIncludes(flat, ["field goal pct", "fg%","field goal percentage"]);
-
-        const ppg = num(ppgRaw);
-        const papg = num(papgRaw);
-        const margin = num(marginRaw);
-
-        let fgPct = num(fgRaw);
-        if (fgPct != null && fgPct > 0 && fgPct <= 1) fgPct = fgPct * 100;
-
-        const out = {
-          ppg:    ppg != null ? ppg.toFixed(1) : null,
-          papg:   papg != null ? papg.toFixed(1) : null,
-          margin: margin != null ? margin.toFixed(1) : null,
-          fgPct:  fgPct != null ? fgPct.toFixed(1) : null
+        return {
+          ppg: ppg != null ? ppg.toFixed(1) : null,
+          fgPct: fg != null ? fg.toFixed(1) : null
         };
-
-        console.log(`✅ Computed team stats ${teamId}:`, out);
-        return out;
-
       } catch (e) {
-        console.error(`❌ Stats fetch failed for team ${teamId}:`, e);
-        return null;
+        console.error("❌ offense stats failed", teamId, e);
+        return { ppg: null, fgPct: null };
       }
     }
 
+    async function fetchDefenseFromSummary(teamId) {
+      // returns { papg, margin } when available
+      try {
+        const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams/${teamId}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        const flat = toTeamSummaryStatMap(data);
+
+        // print keys once per team (remove later if you want)
+        console.log(`🛡️ Summary stat keys for team ${teamId}:`, Object.keys(flat).slice(0, 80));
+
+        const papg = num(
+          pickFirst(flat, ["avgPointsAllowed", "avgPointsAgainst", "pointsAgainstPerGame", "oppPointsPerGame", "opponentPointsPerGame"])
+        );
+
+        const margin = num(
+          pickFirst(flat, ["avgPointDifferential", "pointDifferential", "scoringMargin", "marginOfVictory"])
+        );
+
+        return {
+          papg: papg != null ? papg.toFixed(1) : null,
+          margin: margin != null ? margin.toFixed(1) : null
+        };
+      } catch (e) {
+        console.error("❌ summary defense failed", teamId, e);
+        return { papg: null, margin: null };
+      }
+    }
+
+    async function fetchTeamStatsCombined(teamId) {
+      const [off, def] = await Promise.all([
+        fetchOffenseStats(teamId),
+        fetchDefenseFromSummary(teamId)
+      ]);
+      const combined = { ...off, ...def };
+      console.log(`✅ Combined stats ${teamId}:`, combined);
+      return combined;
+    }
+
+    // ---- UI helpers ----
     function findSpread(oddsData, homeTeam, awayTeam) {
       const match = (oddsData || []).find(game =>
         game.home_team?.toLowerCase().includes(homeTeam.toLowerCase().split(" ").pop()) ||
@@ -172,7 +189,7 @@
     }
 
     function statBlock(stats, teamName) {
-      if (!stats || (!stats.ppg && !stats.papg && !stats.fgPct && !stats.margin)) {
+      if (!stats || (!stats.ppg && !stats.fgPct && !stats.papg && !stats.margin)) {
         return `
           <div class="text-center">
             <p class="text-xs font-bold text-gray-400 mb-1">${teamName}</p>
@@ -193,6 +210,11 @@
               <p class="text-xs text-orange-400 leading-none mb-1">PPG</p>
               <p class="text-base font-black text-orange-600">${stats.ppg}</p>
             </div>` : ""}
+            ${stats.fgPct ? `
+            <div class="bg-purple-50 border border-purple-100 rounded-xl px-3 py-2">
+              <p class="text-xs text-purple-400 leading-none mb-1">FG%</p>
+              <p class="text-base font-black text-purple-600">${stats.fgPct}%</p>
+            </div>` : ""}
             ${stats.papg ? `
             <div class="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2">
               <p class="text-xs text-blue-400 leading-none mb-1">OPP PPG</p>
@@ -202,11 +224,6 @@
             <div class="bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
               <p class="text-xs text-gray-400 leading-none mb-1">MARGIN</p>
               <p class="text-base font-black ${marginColor}">${parseFloat(stats.margin) > 0 ? "+" : ""}${stats.margin}</p>
-            </div>` : ""}
-            ${stats.fgPct ? `
-            <div class="bg-purple-50 border border-purple-100 rounded-xl px-3 py-2">
-              <p class="text-xs text-purple-400 leading-none mb-1">FG%</p>
-              <p class="text-base font-black text-purple-600">${stats.fgPct}%</p>
             </div>` : ""}
           </div>
         </div>`;
@@ -303,12 +320,11 @@
           events.flatMap(ev => (ev.competitions?.[0]?.competitors || []).map(c => c.team?.id).filter(Boolean))
         )];
 
-        const statsResults = await Promise.all(teamIds.map(id => fetchTeamStats(id)));
+        const statsResults = await Promise.all(teamIds.map(id => fetchTeamStatsCombined(id)));
         const teamStatsMap = {};
         teamIds.forEach((id, i) => { teamStatsMap[id] = statsResults[i]; });
 
         console.log("✅ Team stats loaded for", teamIds.length, "teams");
-
         container.innerHTML = events.map(event => buildCard(event, oddsData || [], teamStatsMap)).join("");
 
       } catch (err) {
