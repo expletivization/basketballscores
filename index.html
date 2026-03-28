@@ -23,7 +23,7 @@
     <p class="text-center text-gray-400 animate-pulse">Loading today's games...</p>
   </div>
 
-  <p class="text-center text-gray-300 text-xs mt-12">Data via ESPN · Odds via The Odds API</p>
+  <p class="text-center text-gray-300 text-xs mt-12">Data via ESPN · Odds via The Odds API · Efficiency stats via Barttorvik</p>
 
   <script>
     const ODDS_API_KEY = "8753ccc038eb27ba065e0f4d25d57081";
@@ -38,34 +38,32 @@
 
     const ESPN_URL = `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates=${getDateParam()}`;
     const ODDS_URL = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds/?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads&oddsFormat=american`;
+    const TORVIK_URL = `https://corsproxy.io/?https://barttorvik.com/trank.php?json=1`;
 
     document.getElementById("date-display").textContent = new Date().toLocaleDateString("en-US", {
       weekday: "long", year: "numeric", month: "long", day: "numeric"
     });
 
-    async function loadGames() {
-      const container = document.getElementById("games-container");
-      try {
-        const [espnRes, oddsRes] = await Promise.all([
-          fetch(ESPN_URL),
-          fetch(ODDS_URL)
-        ]);
-        const espnData = await espnRes.json();
-        const oddsData = await oddsRes.json();
-        const events = espnData.events || [];
-
-        if (events.length === 0) {
-          container.innerHTML = `<p class="text-center text-gray-400 text-lg">No games scheduled today.</p>`;
-          return;
-        }
-
-        container.innerHTML = events.map(event => buildCard(event, oddsData)).join("");
-      } catch (err) {
-        container.innerHTML = `<p class="text-center text-red-400">Failed to load games. Please try again later.</p>`;
-        console.error(err);
-      }
+    // --- Normalize team names for fuzzy matching ---
+    function normalizeName(name) {
+      return name
+        .toLowerCase()
+        .replace(/[^a-z0-9 ]/g, "")
+        .replace(/\b(university|college|state|st|of|the|a&m)\b/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
     }
 
+    // --- Find a team in Barttorvik data ---
+    function findTorvik(trvData, teamName) {
+      const needle = normalizeName(teamName);
+      return trvData.find(t => {
+        const hay = normalizeName(t.team);
+        return hay === needle || hay.includes(needle) || needle.includes(hay);
+      });
+    }
+
+    // --- Find spread ---
     function findSpread(oddsData, homeTeam, awayTeam) {
       const match = oddsData.find(game =>
         game.home_team.toLowerCase().includes(homeTeam.toLowerCase().split(" ").pop()) ||
@@ -77,16 +75,14 @@
       return market.outcomes.map(o => `${o.name} ${o.point > 0 ? "+" : ""}${o.point}`).join(" / ");
     }
 
+    // --- Build bullet points ---
     function buildBullets(event, home, away) {
       const bullets = [];
       const competition = event.competitions?.[0];
-
-      // Seeds (tournament context, not AP Poll)
       const homeSeed = home?.curatedRank?.current;
       const awaySeed = away?.curatedRank?.current;
       if (homeSeed && homeSeed <= 16) bullets.push(`🌱 ${home.team.shortDisplayName} is the #${homeSeed} seed`);
       if (awaySeed && awaySeed <= 16) bullets.push(`🌱 ${away.team.shortDisplayName} is the #${awaySeed} seed`);
-
       if (competition?.neutralSite) bullets.push("📍 Neutral site game");
       if (competition?.conferenceCompetition) bullets.push("🏟 Conference matchup");
       const venue = competition?.venue;
@@ -94,14 +90,51 @@
       return bullets;
     }
 
-    function buildCard(event, oddsData) {
+    // --- Torvik stat block for one team ---
+    function trvStatBlock(trvTeam, teamName) {
+      if (!trvTeam) {
+        return `
+          <div class="text-center">
+            <p class="text-xs font-bold text-gray-400 mb-1">${teamName}</p>
+            <p class="text-xs text-gray-300">Stats N/A</p>
+          </div>`;
+      }
+
+      const rank = trvTeam.rk ?? "—";
+      const adjOE = parseFloat(trvTeam.adjoe).toFixed(1);
+      const adjDE = parseFloat(trvTeam.adjde).toFixed(1);
+
+      return `
+        <div class="text-center">
+          <p class="text-xs font-black text-gray-500 uppercase tracking-wide mb-2">${teamName}</p>
+          <div class="flex justify-center gap-3">
+            <div class="bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
+              <p class="text-xs text-gray-400 leading-none mb-1">T-Rank</p>
+              <p class="text-base font-black text-gray-800">#${rank}</p>
+            </div>
+            <div class="bg-orange-50 border border-orange-100 rounded-xl px-3 py-2">
+              <p class="text-xs text-orange-400 leading-none mb-1">AdjOE</p>
+              <p class="text-base font-black text-orange-600">${adjOE}</p>
+            </div>
+            <div class="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2">
+              <p class="text-xs text-blue-400 leading-none mb-1">AdjDE</p>
+              <p class="text-base font-black text-blue-600">${adjDE}</p>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // --- Build a game card ---
+    function buildCard(event, oddsData, trvData) {
       const competition = event.competitions?.[0];
       const competitors = competition?.competitors || [];
       const home = competitors.find(c => c.homeAway === "home");
       const away = competitors.find(c => c.homeAway === "away");
 
-      const homeName = home?.team?.shortDisplayName || "Home";
-      const awayName = away?.team?.shortDisplayName || "Away";
+      const homeName = home?.team?.displayName || "Home";
+      const awayName = away?.team?.displayName || "Away";
+      const homeShort = home?.team?.shortDisplayName || homeName;
+      const awayShort = away?.team?.shortDisplayName || awayName;
       const homeLogo = home?.team?.logo || "";
       const awayLogo = away?.team?.logo || "";
       const homeRecord = home?.records?.[0]?.summary || "";
@@ -111,11 +144,17 @@
         hour: "numeric", minute: "2-digit", timeZoneName: "short"
       });
       const isLive = event.status?.type?.state === "in";
-      const spread = findSpread(oddsData, homeName, awayName) || "Spread N/A";
+      const spread = findSpread(oddsData, homeShort, awayShort) || "Spread N/A";
       const bullets = buildBullets(event, home, away);
+
+      // Torvik lookups using full display name for better matching
+      const homeTrv = findTorvik(trvData, homeName);
+      const awayTrv = findTorvik(trvData, awayName);
 
       return `
         <div class="game-card bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
+
+          <!-- Header: time + broadcast -->
           <div class="flex justify-between items-center mb-4">
             <span class="text-xs font-semibold uppercase tracking-widest ${isLive ? 'text-green-500' : 'text-gray-400'}">
               ${isLive ? '🔴 LIVE' : '🗓 ' + gameTime}
@@ -125,10 +164,11 @@
             </span>
           </div>
 
+          <!-- Teams -->
           <div class="flex items-center justify-between gap-4">
             <div class="flex flex-col items-center text-center w-1/3">
-              <img src="${awayLogo}" alt="${awayName}" class="w-16 h-16 object-contain mb-2" onerror="this.style.display='none'"/>
-              <p class="font-bold text-lg leading-tight text-gray-900">${awayName}</p>
+              <img src="${awayLogo}" alt="${awayShort}" class="w-16 h-16 object-contain mb-2" onerror="this.style.display='none'"/>
+              <p class="font-bold text-lg leading-tight text-gray-900">${awayShort}</p>
               <p class="text-gray-400 text-sm">${awayRecord}</p>
             </div>
             <div class="flex flex-col items-center w-1/3">
@@ -136,18 +176,63 @@
               <p class="text-xs text-amber-500 font-semibold mt-1">${spread}</p>
             </div>
             <div class="flex flex-col items-center text-center w-1/3">
-              <img src="${homeLogo}" alt="${homeName}" class="w-16 h-16 object-contain mb-2" onerror="this.style.display='none'"/>
-              <p class="font-bold text-lg leading-tight text-gray-900">${homeName}</p>
+              <img src="${homeLogo}" alt="${homeShort}" class="w-16 h-16 object-contain mb-2" onerror="this.style.display='none'"/>
+              <p class="font-bold text-lg leading-tight text-gray-900">${homeShort}</p>
               <p class="text-gray-400 text-sm">${homeRecord}</p>
             </div>
           </div>
 
+          <!-- Torvik Stats -->
+          <div class="mt-5 border-t border-gray-100 pt-4 grid grid-cols-2 gap-4">
+            ${trvStatBlock(awayTrv, awayShort)}
+            ${trvStatBlock(homeTrv, homeShort)}
+          </div>
+
+          <!-- Bullet Points -->
           ${bullets.length > 0 ? `
-          <ul class="mt-5 border-t border-gray-100 pt-4 space-y-1">
+          <ul class="mt-4 border-t border-gray-100 pt-4 space-y-1">
             ${bullets.map(b => `<li class="text-sm text-gray-500">• ${b}</li>`).join("")}
           </ul>` : ""}
+
         </div>
       `;
+    }
+
+    // --- Main loader ---
+    async function loadGames() {
+      const container = document.getElementById("games-container");
+      try {
+        const [espnRes, oddsRes, trvRes] = await Promise.all([
+          fetch(ESPN_URL),
+          fetch(ODDS_URL),
+          fetch(TORVIK_URL)
+        ]);
+
+        const espnData = await espnRes.json();
+        const oddsData = await oddsRes.json();
+        const trvRaw = await trvRes.json();
+
+        // Barttorvik returns an array of arrays — map to objects
+        const trvData = trvRaw.map(t => ({
+          team:  t[0],
+          adjoe: t[4],
+          adjde: t[5],
+          rk:    t[3]
+        }));
+
+        const events = espnData.events || [];
+
+        if (events.length === 0) {
+          container.innerHTML = `<p class="text-center text-gray-400 text-lg">No games scheduled today.</p>`;
+          return;
+        }
+
+        container.innerHTML = events.map(event => buildCard(event, oddsData, trvData)).join("");
+
+      } catch (err) {
+        container.innerHTML = `<p class="text-center text-red-400">Failed to load games. Please try again later.</p>`;
+        console.error(err);
+      }
     }
 
     loadGames();
