@@ -23,7 +23,7 @@
     <p class="text-center text-gray-400 animate-pulse">Loading today's games...</p>
   </div>
 
-  <p class="text-center text-gray-300 text-xs mt-12">Data via ESPN · Odds via The Odds API · Efficiency stats via Barttorvik</p>
+  <p class="text-center text-gray-300 text-xs mt-12">Data via ESPN · Odds via The Odds API · Efficiency stats via Bart</p>
 
   <script>
     const ODDS_API_KEY = "8753ccc038eb27ba065e0f4d25d57081";
@@ -38,7 +38,7 @@
 
     const ESPN_URL = `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates=${getDateParam()}`;
     const ODDS_URL = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds/?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads&oddsFormat=american`;
-    const TORVIK_URL = `https://corsproxy.io/?https://barttorvik.com/trank.php?json=1`;
+    const TORVIK_URL = `https://api.allorigins.win/raw?url=${encodeURIComponent("https://barttorvik.com/trank.php?json=1")}`;
 
     document.getElementById("date-display").textContent = new Date().toLocaleDateString("en-US", {
       weekday: "long", year: "numeric", month: "long", day: "numeric"
