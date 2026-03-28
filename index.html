@@ -43,27 +43,85 @@
       weekday: "long", year: "numeric", month: "long", day: "numeric"
     });
 
-    // --- Fetch stats for a single team by ESPN team ID ---
+    // ---- ESPN stats helpers (robust to multiple payload shapes) ----
+    function toFlatStatMap(statsPayload) {
+      // ESPN commonly returns either:
+      // 1) { stats: [{name, value}, ...] }
+      // 2) { statistics: { splits: { categories: [{stats:[{name,value}, ...]}] } } }
+      // 3) { splits: { categories: ... } }
+      const map = {};
+
+      const addStatArray = (arr) => {
+        if (!Array.isArray(arr)) return;
+        for (const s of arr) {
+          if (!s) continue;
+          const name = s.name || s.shortName || s.abbreviation || s.displayName;
+          const value = s.value ?? s.displayValue;
+          if (name != null && value != null) map[String(name)] = value;
+        }
+      };
+
+      // Shape 1
+      addStatArray(statsPayload?.stats);
+
+      // Shape 2/3
+      const categories =
+        statsPayload?.statistics?.splits?.categories ||
+        statsPayload?.splits?.categories ||
+        statsPayload?.results?.stats?.categories ||   // (older guess)
+        statsPayload?.categories;
+
+      if (Array.isArray(categories)) {
+        for (const cat of categories) addStatArray(cat?.stats);
+      }
+
+      return map;
+    }
+
+    function num(v) {
+      if (v == null) return null;
+      const n = typeof v === "number" ? v : parseFloat(String(v).replace("%",""));
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function pickFirst(map, keys) {
+      for (const k of keys) {
+        if (map[k] != null) return map[k];
+      }
+      return null;
+    }
+
+    // Fetch stats for a team by ESPN team ID
     async function fetchTeamStats(teamId) {
       try {
-        const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams/${teamId}/statistics`);
+        const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams/${teamId}/statistics`;
+        const res = await fetch(url);
         const data = await res.json();
-        const categories = data?.results?.stats?.categories || [];
 
-        const find = (catName, statName) => {
-          const cat = categories.find(c => c.name === catName);
-          if (!cat) return null;
-          const stat = cat.stats.find(s => s.name === statName);
-          return stat ? parseFloat(stat.value).toFixed(1) : null;
-        };
+        const flat = toFlatStatMap(data);
+
+        // Helpful debug (you can remove later)
+        console.log(`📦 Stats keys for team ${teamId}:`, Object.keys(flat).slice(0, 30));
+
+        // These key names vary; we try multiple likely candidates.
+        const ppgRaw   = pickFirst(flat, ["ppg", "avgPoints", "pointsPerGame", "pointsPerGameFor", "pointsForPerGame"]);
+        const papgRaw  = pickFirst(flat, ["oppg", "avgPointsAgainst", "avgPointsAllowed", "pointsAgainstPerGame", "pointsAllowedPerGame"]);
+        const marginRaw= pickFirst(flat, ["avgPointDifferential", "pointDifferential", "scoringMargin", "marginOfVictory"]);
+        const fgRaw    = pickFirst(flat, ["fieldGoalPct", "fgPct", "fieldGoalPercentage"]);
+
+        const ppg = num(ppgRaw);
+        const papg = num(papgRaw);
+        const margin = num(marginRaw);
+
+        // FG% sometimes comes as 0.445 or 44.5 depending on endpoint
+        let fgPct = num(fgRaw);
+        if (fgPct != null && fgPct > 0 && fgPct <= 1) fgPct = fgPct * 100;
 
         return {
-          ppg:    find("scoring", "avgPoints"),
-          papg:   find("defensive", "avgPointsAllowed"),
-          margin: find("scoring", "avgPointDifferential"),
-          fgPct:  find("field goals", "fieldGoalPct")
-            ? (parseFloat(find("field goals", "fieldGoalPct")) * 100).toFixed(1)
-            : null
+          ppg:    ppg != null ? ppg.toFixed(1) : null,
+          papg:   papg != null ? papg.toFixed(1) : null,
+          margin: margin != null ? margin.toFixed(1) : null,
+          fgPct:  fgPct != null ? fgPct.toFixed(1) : null
         };
       } catch (e) {
         console.error(`❌ Stats fetch failed for team ${teamId}:`, e);
@@ -72,9 +130,9 @@
     }
 
     function findSpread(oddsData, homeTeam, awayTeam) {
-      const match = oddsData.find(game =>
-        game.home_team.toLowerCase().includes(homeTeam.toLowerCase().split(" ").pop()) ||
-        game.away_team.toLowerCase().includes(awayTeam.toLowerCase().split(" ").pop())
+      const match = (oddsData || []).find(game =>
+        game.home_team?.toLowerCase().includes(homeTeam.toLowerCase().split(" ").pop()) ||
+        game.away_team?.toLowerCase().includes(awayTeam.toLowerCase().split(" ").pop())
       );
       if (!match) return null;
       const market = match.bookmakers?.[0]?.markets?.find(m => m.key === "spreads");
@@ -97,7 +155,7 @@
     }
 
     function statBlock(stats, teamName) {
-      if (!stats || (!stats.ppg && !stats.papg)) {
+      if (!stats || (!stats.ppg && !stats.papg && !stats.fgPct && !stats.margin)) {
         return `
           <div class="text-center">
             <p class="text-xs font-bold text-gray-400 mb-1">${teamName}</p>
@@ -106,7 +164,7 @@
       }
 
       const marginColor = stats.margin
-        ? parseFloat(stats.margin) >= 0 ? "text-green-600" : "text-red-500"
+        ? (parseFloat(stats.margin) >= 0 ? "text-green-600" : "text-red-500")
         : "text-gray-400";
 
       return `
@@ -149,10 +207,12 @@
       const awayShort = away?.team?.shortDisplayName || awayName;
       const homeId = home?.team?.id;
       const awayId = away?.team?.id;
+
       const homeLogo = home?.team?.logo || "";
       const awayLogo = away?.team?.logo || "";
       const homeRecord = home?.records?.[0]?.summary || "";
       const awayRecord = away?.records?.[0]?.summary || "";
+
       const broadcast = competition?.broadcasts?.map(b => b.names?.join(", ")).join(", ") || "TBD";
       const gameTime = new Date(event.date).toLocaleTimeString("en-US", {
         hour: "numeric", minute: "2-digit", timeZoneName: "short"
@@ -209,49 +269,31 @@
       const container = document.getElementById("games-container");
 
       try {
-        let espnData, oddsData;
+        const [espnRes, oddsRes] = await Promise.all([fetch(ESPN_URL), fetch(ODDS_URL)]);
+        const espnData = await espnRes.json();
+        const oddsData = await oddsRes.json();
 
-        try {
-          const espnRes = await fetch(ESPN_URL);
-          espnData = await espnRes.json();
-          console.log("✅ ESPN loaded:", espnData);
-        } catch (e) {
-          console.error("❌ ESPN fetch failed:", e);
-        }
-
-        try {
-          const oddsRes = await fetch(ODDS_URL);
-          oddsData = await oddsRes.json();
-          console.log("✅ Odds loaded:", oddsData);
-        } catch (e) {
-          console.error("❌ Odds fetch failed:", e);
-        }
+        console.log("✅ ESPN loaded:", espnData);
+        console.log("✅ Odds loaded:", oddsData);
 
         const events = espnData?.events || [];
-
         if (events.length === 0) {
           container.innerHTML = `<p class="text-center text-gray-400 text-lg">No games scheduled today.</p>`;
           return;
         }
 
-        // Collect all unique team IDs across all games
-        const teamIds = [];
-        events.forEach(event => {
-          const competitors = event.competitions?.[0]?.competitors || [];
-          competitors.forEach(c => {
-            if (c.team?.id && !teamIds.includes(c.team.id)) {
-              teamIds.push(c.team.id);
-            }
-          });
-        });
+        // Collect unique team IDs
+        const teamIds = [...new Set(
+          events.flatMap(ev => (ev.competitions?.[0]?.competitors || []).map(c => c.team?.id).filter(Boolean))
+        )];
 
         // Fetch all team stats in parallel
         const statsResults = await Promise.all(teamIds.map(id => fetchTeamStats(id)));
         const teamStatsMap = {};
-        teamIds.forEach((id, i) => {
-          teamStatsMap[id] = statsResults[i];
-        });
+        teamIds.forEach((id, i) => { teamStatsMap[id] = statsResults[i]; });
+
         console.log("✅ Team stats loaded for", teamIds.length, "teams");
+        console.log("🧾 Sample teamStatsMap:", teamStatsMap[teamIds[0]]);
 
         container.innerHTML = events.map(event => buildCard(event, oddsData || [], teamStatsMap)).join("");
 
