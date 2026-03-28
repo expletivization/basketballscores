@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>🏀 Today's College Hoops</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .game-card { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+    .game-card:hover { transform: translateY(-3px); box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+  </style>
+</head>
+<body class="bg-gray-950 text-white min-h-screen px-4 py-10">
+
+  <div class="max-w-4xl mx-auto mb-10 text-center">
+    <h1 class="text-5xl font-black tracking-tight">🏀 College Hoops Today</h1>
+    <p id="date-display" class="text-gray-400 mt-2 text-lg"></p>
+  </div>
+
+  <div id="games-container" class="max-w-4xl mx-auto grid gap-5">
+    <p class="text-center text-gray-500 animate-pulse">Loading today's games...</p>
+  </div>
+
+  <p class="text-center text-gray-600 text-xs mt-12">Data via ESPN · Odds via The Odds API</p>
+
+  <script>
+    const ODDS_API_KEY = "8753ccc038eb27ba065e0f4d25d57081";
+    const ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard";
+    const ODDS_URL = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds/?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads&oddsFormat=american`;
+
+    document.getElementById("date-display").textContent = new Date().toLocaleDateString("en-US", {
+      weekday: "long", year: "numeric", month: "long", day: "numeric"
+    });
+
+    async function loadGames() {
+      const container = document.getElementById("games-container");
+      try {
+        const [espnRes, oddsRes] = await Promise.all([
+          fetch(ESPN_URL),
+          fetch(ODDS_URL)
+        ]);
+        const espnData = await espnRes.json();
+        const oddsData = await oddsRes.json();
+        const events = espnData.events || [];
+
+        if (events.length === 0) {
+          container.innerHTML = `<p class="text-center text-gray-500 text-lg">No games scheduled today.</p>`;
+          return;
+        }
+
+        container.innerHTML = events.map(event => buildCard(event, oddsData)).join("");
+      } catch (err) {
+        container.innerHTML = `<p class="text-center text-red-400">Failed to load games. Please try again later.</p>`;
+        console.error(err);
+      }
+    }
+
+    function findSpread(oddsData, homeTeam, awayTeam) {
+      const match = oddsData.find(game =>
+        game.home_team.toLowerCase().includes(homeTeam.toLowerCase().split(" ").pop()) ||
+        game.away_team.toLowerCase().includes(awayTeam.toLowerCase().split(" ").pop())
+      );
+      if (!match) return null;
+      const market = match.bookmakers?.[0]?.markets?.find(m => m.key === "spreads");
+      if (!market) return null;
+      return market.outcomes.map(o => `${o.name} ${o.point > 0 ? "+" : ""}${o.point}`).join(" / ");
+    }
+
+    function buildBullets(event, home, away) {
+      const bullets = [];
+      const competition = event.competitions?.[0];
+      const homeRank = home?.curatedRank?.current;
+      const awayRank = away?.curatedRank?.current;
+      if (homeRank && homeRank <= 25) bullets.push(`🏆 ${home.team.shortDisplayName} is ranked #${homeRank} in the AP Poll`);
+      if (awayRank && awayRank <= 25) bullets.push(`🏆 ${away.team.shortDisplayName} is ranked #${awayRank} in the AP Poll`);
+      if (competition?.neutralSite) bullets.push("📍 Neutral site game");
+      if (competition?.conferenceCompetition) bullets.push("🏟 Conference matchup");
+      const venue = competition?.venue;
+      if (venue?.fullName) bullets.push(`📍 ${venue.fullName}${venue.address?.city ? ", " + venue.address.city : ""}`);
+      return bullets;
+    }
+
+    function buildCard(event, oddsData) {
+      const competition = event.competitions?.[0];
+      const competitors = competition?.competitors || [];
+      const home = competitors.find(c => c.homeAway === "home");
+      const away = competitors.find(c => c.homeAway === "away");
+
+      const homeName = home?.team?.shortDisplayName || "Home";
+      const awayName = away?.team?.shortDisplayName || "Away";
+      const homeLogo = home?.team?.logo || "";
+      const awayLogo = away?.team?.logo || "";
+      const homeRecord = home?.records?.[0]?.summary || "";
+      const awayRecord = away?.records?.[0]?.summary || "";
+      const broadcast = competition?.broadcasts?.map(b => b.names?.join(", ")).join(", ") || "TBD";
+      const gameTime = new Date(event.date).toLocaleTimeString("en-US", {
+        hour: "numeric", minute: "2-digit", timeZoneName: "short"
+      });
+      const isLive = event.status?.type?.state === "in";
+      const spread = findSpread(oddsData, homeName, awayName) || "Spread N/A";
+      const bullets = buildBullets(event, home, away);
+
+      return `
+        <div class="game-card bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-lg">
+          <div class="flex justify-between items-center mb-4">
+            <span class="text-xs font-semibold uppercase tracking-widest ${isLive ? 'text-green-400' : 'text-gray-500'}">
+              ${isLive ? '🔴 LIVE' : '🗓 ' + gameTime}
+            </span>
+            <span class="text-xs font-semibold bg-blue-900 text-blue-300 px-3 py-1 rounded-full">
+              📺 ${broadcast}
+            </span>
+          </div>
+
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex flex-col items-center text-center w-1/3">
+              <img src="${awayLogo}" alt="${awayName}" class="w-16 h-16 object-contain mb-2" onerror="this.style.display='none'"/>
+              <p class="font-bold text-lg leading-tight">${awayName}</p>
+              <p class="text-gray-500 text-sm">${awayRecord}</p>
+            </div>
+            <div class="flex flex-col items-center w-1/3">
+              <p class="text-3xl font-black text-gray-600">VS</p>
+              <p class="text-xs text-yellow-400 font-semibold mt-1">${spread}</p>
+            </div>
+            <div class="flex flex-col items-center text-center w-1/3">
+              <img src="${homeLogo}" alt="${homeName}" class="w-16 h-16 object-contain mb-2" onerror="this.style.display='none'"/>
+              <p class="font-bold text-lg leading-tight">${homeName}</p>
+              <p class="text-gray-500 text-sm">${homeRecord}</p>
+            </div>
+          </div>
+
+          ${bullets.length > 0 ? `
+          <ul class="mt-5 border-t border-gray-800 pt-4 space-y-1">
+            ${bullets.map(b => `<li class="text-sm text-gray-400">• ${b}</li>`).join("")}
+          </ul>` : ""}
+        </div>
+      `;
+    }
+
+    loadGames();
+  </script>
+</body>
+</html>
