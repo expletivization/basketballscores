@@ -38,7 +38,7 @@
 
     const ESPN_URL = `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates=${getDateParam()}`;
     const ODDS_URL = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds/?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads&oddsFormat=american`;
-    const TORVIK_URL = `https://barttorvik.com/trank.php?json=1&cors=1`;
+    const TORVIK_URL = `https://api.allorigins.win/get?url=${encodeURIComponent("https://barttorvik.com/trank.php?json=1")}`;
 
     document.getElementById("date-display").textContent = new Date().toLocaleDateString("en-US", {
       weekday: "long", year: "numeric", month: "long", day: "numeric"
@@ -209,7 +209,8 @@
           const timeout = setTimeout(() => controller.abort(), 5000);
           const trvRes = await fetch(TORVIK_URL, { signal: controller.signal });
           clearTimeout(timeout);
-          const trvRaw = await trvRes.json();
+          const wrapper = await trvRes.json();
+          const trvRaw = JSON.parse(wrapper.contents);
           trvData = trvRaw.map(t => ({
             team:  t[0],
             adjoe: t[4],
